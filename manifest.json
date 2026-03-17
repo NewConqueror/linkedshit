@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "LinkedIn BS Filter",
+  "version": "1.0",
+  "description": "Filters out the bullshit on LinkedIn.",
+  "permissions": [
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "*://*.linkedin.com/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "LinkedIn BS Filter"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.linkedin.com/*"
+      ],
+      "js": [
+        "words.js",
+        "content.js"
+      ],
+      "run_at": "document_end"
+    }
+  ],
+
+  "icons": {
+  "128": "icons/logo.png"
+  }
+}

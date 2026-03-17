@@ -1,0 +1,28 @@
+/**
+ * styles.css
+ * 
+ * Injected into *://*.linkedin.com/* alongside content.js.
+ * Used for visually hiding or styling specific elements on the page.
+ */
+
+.bs-keyword {
+  color: #bd1a1a !important;
+  font-weight: bold !important;
+  background-color: rgba(224, 45, 45, 0.1) !important;
+  padding: 0 4px;
+  border-radius: 4px;
+  display: inline-block;
+  text-decoration: line-through;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  cursor: help;
+}
+
+.bs-keyword:hover {
+  background-color: rgba(224, 45, 45, 0.2) !important;
+  transform: scale(1.05);
+}
+
+/* Example: class to be applied to filtered elements (legacy) */
+.linkedin-bs-filtered {
+  display: none !important;
+}
