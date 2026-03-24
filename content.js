@@ -81,7 +81,14 @@ function restoreDOM() {
             emp.parentNode.replaceChild(document.createTextNode(originalEmoji), emp);
         });
 
-        // 2. Artık wrapper'ın içindeki tüm metin (textContent) %100 orijinal halinde. 
+        // 2. Değiştirilen BS kelimelerini orijinal haline (data-orig) döndür
+        const keywords = wrapper.querySelectorAll('span.bs-keyword');
+        keywords.forEach(kw => {
+            const originalKeyword = kw.getAttribute('data-orig');
+            kw.parentNode.replaceChild(document.createTextNode(originalKeyword), kw);
+        });
+
+        // 3. Artık wrapper'ın içindeki tüm metin (textContent) %100 orijinal halinde. 
         // Wrapper'ı yok et ve yerine saf metin düğümü koy.
         const originalTextNode = document.createTextNode(wrapper.textContent);
         wrapper.parentNode.replaceChild(originalTextNode, wrapper);
@@ -110,7 +117,7 @@ function processTextNode(node) {
     
     // 2. BS kelimelerini değiştir
     if (hasBS) {
-        processedHTML = processedHTML.replace(regexBS, '<span class="bs-keyword" style="color:red; font-weight:bold; text-decoration:underline;">$&</span>');
+        processedHTML = processedHTML.replace(regexBS, '<span class="bs-keyword" data-orig="$&">🔴</span>');
     }
 
     // Tek bir ana kapsayıcı (wrapper) oluştur ve DOM'a bas
