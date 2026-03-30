@@ -36,6 +36,28 @@
     <p class="hint">Skor = yakalanan jargon + emoji adedi. Eşik üstündeki gönderiler daraltılır.</p>
   </div>
 
+  <div class="stats-section">
+    <div class="row stats-header">
+      <strong>📈 Haftalık İstatistik</strong>
+      <button id="resetStatsBtn" class="ghost-btn" type="button">Sıfırla</button>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <span class="stat-label">Yakalama</span>
+        <strong id="weeklyCatchCount">0</strong>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">Gönderi</span>
+        <strong id="weeklyPostCount">0</strong>
+      </div>
+    </div>
+
+    <p class="stats-subtitle">En sık kelimeler</p>
+    <ul id="topWordsList" class="stats-list"></ul>
+    <p id="statsEmpty" class="hint">Bu hafta henüz yakalama verisi yok.</p>
+  </div>
+
   <ul id="wordList"></ul>
   
   <script src="words.js"></script>

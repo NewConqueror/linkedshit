@@ -64,6 +64,91 @@ button.delete-btn:hover {
   background: #f8fafc;
 }
 
+.stats-section {
+  border: 1px solid #d8dee4;
+  border-radius: 8px;
+  padding: 10px;
+  margin-bottom: 12px;
+  background: #f8fafc;
+}
+
+.stats-header {
+  margin-bottom: 8px;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.stat-card {
+  background: #ffffff;
+  border: 1px solid #e5eaf0;
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.stat-label {
+  display: block;
+  font-size: 11px;
+  color: #57606a;
+  margin-bottom: 4px;
+}
+
+.stats-subtitle {
+  margin: 10px 0 6px;
+  font-size: 12px;
+  color: #364152;
+  font-weight: 600;
+}
+
+.stats-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.stats-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #e7edf5;
+  border-radius: 6px;
+  padding: 6px 8px;
+  margin-bottom: 5px;
+  background: #ffffff;
+  font-size: 12px;
+}
+
+.stats-word {
+  color: #1f2937;
+  max-width: 80%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stats-count {
+  color: #0a66c2;
+  font-weight: 700;
+}
+
+.ghost-btn {
+  background: #ffffff;
+  color: #4b5563;
+  border: 1px solid #d1d5db;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.ghost-btn:hover {
+  background: #f3f4f6;
+}
+
 .range-label {
   display: block;
   margin: 8px 0 6px;

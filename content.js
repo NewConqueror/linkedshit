@@ -52,6 +52,16 @@ let scoreRefreshTimer = null;
 let observerCycleCount = 0;
 let observerWindowStart = Date.now();
 let observerCooldownTimer = null;
+let statsFlushTimer = null;
+
+const weeklyStatsStorageKey = 'bsWeeklyStatsV1';
+const maxSeenHashesPerWeek = 2500;
+const maxTrackedWords = 300;
+const statsFlushDelayMs = 1200;
+
+let pendingStatsRecords = [];
+let sessionReportedHashes = new Set();
+let sessionWeekKey = '';
 
 const observerWindowMs = 2500;
 const observerCycleLimit = 500;
@@ -201,6 +211,154 @@ function isWeakPostContainer(element) {
 
 function getDirectPreview(post) {
     return Array.from(post.children).find((child) => child.classList && child.classList.contains('bs-post-preview')) || null;
+}
+
+function getCurrentWeekKey() {
+    const now = new Date();
+    const utcDate = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+    const dayNum = utcDate.getUTCDay() || 7;
+    utcDate.setUTCDate(utcDate.getUTCDate() + 4 - dayNum);
+
+    const yearStart = new Date(Date.UTC(utcDate.getUTCFullYear(), 0, 1));
+    const weekNo = Math.ceil((((utcDate - yearStart) / 86400000) + 1) / 7);
+
+    return `${utcDate.getUTCFullYear()}-W${String(weekNo).padStart(2, '0')}`;
+}
+
+function ensureStatsWeekContext() {
+    const currentWeekKey = getCurrentWeekKey();
+    if (sessionWeekKey !== currentWeekKey) {
+        sessionWeekKey = currentWeekKey;
+        sessionReportedHashes = new Set();
+    }
+    return currentWeekKey;
+}
+
+function createEmptyWeeklyStats(weekKey) {
+    return {
+        weekKey,
+        totalCatches: 0,
+        totalPosts: 0,
+        topWords: {},
+        seenPostHashes: [],
+        updatedAt: Date.now()
+    };
+}
+
+function normalizeStatWord(word) {
+    if (!word) return '';
+    return word
+        .toLocaleLowerCase('tr-TR')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function hashString(input) {
+    let hash = 2166136261;
+    for (let i = 0; i < input.length; i += 1) {
+        hash ^= input.charCodeAt(i);
+        hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
+    }
+
+    return (hash >>> 0).toString(36);
+}
+
+function createPostFingerprint(post, metric) {
+    const urn = (post.getAttribute && (post.getAttribute('data-urn') || post.getAttribute('data-id'))) || '';
+    const wordsSignature = Object.keys(metric.words).sort().join('|');
+    const scoreSignature = `${metric.score}|${metric.emojiCount}`;
+    const textSample = (post.textContent || '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 220);
+
+    return hashString(`${urn}|${scoreSignature}|${wordsSignature}|${textSample}`);
+}
+
+function pruneWordFrequencyMap(wordMap) {
+    const entries = Object.entries(wordMap || {});
+    if (entries.length <= maxTrackedWords) return wordMap || {};
+
+    entries.sort((a, b) => b[1] - a[1]);
+    return Object.fromEntries(entries.slice(0, maxTrackedWords));
+}
+
+function flushPendingStats() {
+    if (!pendingStatsRecords.length) return;
+
+    ensureStatsWeekContext();
+
+    const recordsToFlush = pendingStatsRecords;
+    pendingStatsRecords = [];
+
+    chrome.storage.local.get({ [weeklyStatsStorageKey]: null }, (result) => {
+        const weekKey = ensureStatsWeekContext();
+        let stats = result[weeklyStatsStorageKey];
+
+        if (!stats || stats.weekKey !== weekKey) {
+            stats = createEmptyWeeklyStats(weekKey);
+        }
+
+        const seenSet = new Set(stats.seenPostHashes || []);
+
+        recordsToFlush.forEach((record) => {
+            if (seenSet.has(record.fingerprint)) return;
+
+            seenSet.add(record.fingerprint);
+            stats.totalPosts += 1;
+            stats.totalCatches += record.score;
+
+            Object.entries(record.words).forEach(([word, count]) => {
+                stats.topWords[word] = (stats.topWords[word] || 0) + count;
+            });
+        });
+
+        stats.topWords = pruneWordFrequencyMap(stats.topWords);
+        stats.seenPostHashes = Array.from(seenSet).slice(-maxSeenHashesPerWeek);
+        stats.updatedAt = Date.now();
+
+        chrome.storage.local.set({ [weeklyStatsStorageKey]: stats });
+    });
+}
+
+function scheduleStatsFlush() {
+    clearTimeout(statsFlushTimer);
+    statsFlushTimer = setTimeout(() => {
+        flushPendingStats();
+    }, statsFlushDelayMs);
+}
+
+function queueStatsFromPostMetrics(postMetrics) {
+    if (!postMetrics || postMetrics.size === 0) return;
+
+    ensureStatsWeekContext();
+
+    const records = [];
+
+    postMetrics.forEach((metric, post) => {
+        if (!metric || !metric.score) return;
+
+        const fingerprint = createPostFingerprint(post, metric);
+        if (!fingerprint || sessionReportedHashes.has(fingerprint)) return;
+
+        sessionReportedHashes.add(fingerprint);
+
+        records.push({
+            fingerprint,
+            score: metric.score,
+            words: metric.words,
+            emojiCount: metric.emojiCount
+        });
+    });
+
+    if (!records.length) return;
+
+    pendingStatsRecords.push(...records);
+    if (pendingStatsRecords.length > 800) {
+        pendingStatsRecords = pendingStatsRecords.slice(-800);
+    }
+
+    scheduleStatsFlush();
 }
 
 function clearCollapsedPreview(post) {
@@ -410,7 +568,7 @@ function applyPostScoring() {
         return;
     }
 
-    const postScores = new Map();
+    const postMetrics = new Map();
     document.querySelectorAll('span.bs-main-wrapper').forEach((wrapper) => {
         let post = findPostContainer(wrapper.parentElement || wrapper);
         if (!post && wrapper.closest) {
@@ -432,11 +590,28 @@ function applyPostScoring() {
         const nodeScore = bsCount + emojiCount;
         if (!nodeScore) return;
 
-        postScores.set(post, (postScores.get(post) || 0) + nodeScore);
+        const metric = postMetrics.get(post) || {
+            score: 0,
+            emojiCount: 0,
+            words: {}
+        };
+
+        metric.score += nodeScore;
+        metric.emojiCount += emojiCount;
+
+        wrapper.querySelectorAll('span.bs-keyword').forEach((keywordNode) => {
+            const rawWord = keywordNode.getAttribute('data-orig') || '';
+            const normalizedWord = normalizeStatWord(rawWord);
+            if (!normalizedWord) return;
+
+            metric.words[normalizedWord] = (metric.words[normalizedWord] || 0) + 1;
+        });
+
+        postMetrics.set(post, metric);
     });
 
     document.querySelectorAll('.bs-scored-post').forEach((post) => {
-        if (postScores.has(post)) return;
+        if (postMetrics.has(post)) return;
         post.classList.remove('bs-scored-post', 'bs-collapsed-post');
         post.removeAttribute('data-bs-score');
         delete post.dataset.bsForceOpen;
@@ -446,9 +621,11 @@ function applyPostScoring() {
         if (badge) badge.remove();
     });
 
-    postScores.forEach((score, post) => {
-        upsertPostBadge(post, score);
+    postMetrics.forEach((metric, post) => {
+        upsertPostBadge(post, metric.score);
     });
+
+    queueStatsFromPostMetrics(postMetrics);
 }
 
 function schedulePostScoring() {

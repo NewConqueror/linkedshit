@@ -7,6 +7,14 @@ const enableScoring = document.getElementById('enableScoring');
 const scoreThreshold = document.getElementById('scoreThreshold');
 const scoreThresholdValue = document.getElementById('scoreThresholdValue');
 const applyScoreBtn = document.getElementById('applyScoreBtn');
+const weeklyCatchCount = document.getElementById('weeklyCatchCount');
+const weeklyPostCount = document.getElementById('weeklyPostCount');
+const topWordsList = document.getElementById('topWordsList');
+const statsEmpty = document.getElementById('statsEmpty');
+const resetStatsBtn = document.getElementById('resetStatsBtn');
+
+const weeklyStatsStorageKey = 'bsWeeklyStatsV1';
+const topWordsLimit = 5;
 
 // Varsayılan State
 let state = {
@@ -26,6 +34,78 @@ function normalizeThreshold(value) {
     const parsed = Number.parseInt(value, 10);
     if (Number.isNaN(parsed)) return 6;
     return Math.min(20, Math.max(1, parsed));
+}
+
+function getCurrentWeekKey() {
+    const now = new Date();
+    const utcDate = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+    const dayNum = utcDate.getUTCDay() || 7;
+    utcDate.setUTCDate(utcDate.getUTCDate() + 4 - dayNum);
+
+    const yearStart = new Date(Date.UTC(utcDate.getUTCFullYear(), 0, 1));
+    const weekNo = Math.ceil((((utcDate - yearStart) / 86400000) + 1) / 7);
+
+    return `${utcDate.getUTCFullYear()}-W${String(weekNo).padStart(2, '0')}`;
+}
+
+function createEmptyWeeklyStats() {
+    return {
+        weekKey: getCurrentWeekKey(),
+        totalCatches: 0,
+        totalPosts: 0,
+        topWords: {},
+        seenPostHashes: [],
+        updatedAt: Date.now()
+    };
+}
+
+function renderTopWords(topWords) {
+    topWordsList.innerHTML = '';
+    const entries = Object.entries(topWords || {}).sort((a, b) => b[1] - a[1]).slice(0, topWordsLimit);
+
+    if (!entries.length) {
+        statsEmpty.style.display = 'block';
+        return;
+    }
+
+    statsEmpty.style.display = 'none';
+
+    entries.forEach(([word, count]) => {
+        const li = document.createElement('li');
+
+        const wordSpan = document.createElement('span');
+        wordSpan.className = 'stats-word';
+        wordSpan.textContent = word;
+
+        const countSpan = document.createElement('span');
+        countSpan.className = 'stats-count';
+        countSpan.textContent = String(count);
+
+        li.appendChild(wordSpan);
+        li.appendChild(countSpan);
+        topWordsList.appendChild(li);
+    });
+}
+
+function renderWeeklyStats(stats) {
+    const effectiveStats = stats || createEmptyWeeklyStats();
+    weeklyCatchCount.textContent = String(effectiveStats.totalCatches || 0);
+    weeklyPostCount.textContent = String(effectiveStats.totalPosts || 0);
+    renderTopWords(effectiveStats.topWords || {});
+}
+
+function loadWeeklyStats() {
+    chrome.storage.local.get({ [weeklyStatsStorageKey]: null }, (data) => {
+        const savedStats = data[weeklyStatsStorageKey];
+        const weekKey = getCurrentWeekKey();
+
+        if (!savedStats || savedStats.weekKey !== weekKey) {
+            renderWeeklyStats(createEmptyWeeklyStats());
+            return;
+        }
+
+        renderWeeklyStats(savedStats);
+    });
 }
 
 function renderApplyButtonState() {
@@ -60,6 +140,7 @@ chrome.storage.sync.get({
     toggleExtension.checked = state.isActive;
     renderScoringControls();
     renderList();
+    loadWeeklyStats();
 });
 
 // 2. UI ÇİZİM FONKSİYONU
@@ -121,6 +202,20 @@ applyScoreBtn.addEventListener('click', () => {
     state.scoreThreshold = normalizeThreshold(pendingScoreThreshold);
     renderScoringControls();
     saveAndNotify();
+});
+
+resetStatsBtn.addEventListener('click', () => {
+    const freshStats = createEmptyWeeklyStats();
+    chrome.storage.local.set({ [weeklyStatsStorageKey]: freshStats }, () => {
+        renderWeeklyStats(freshStats);
+    });
+});
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== 'local') return;
+    if (!changes[weeklyStatsStorageKey]) return;
+
+    loadWeeklyStats();
 });
 
 // Yeni kelime eklendiğinde
