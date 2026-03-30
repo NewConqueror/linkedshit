@@ -1,0 +1,119 @@
+body {
+  width: 320px;
+  margin: 0;
+  padding: 15px;
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  background: #ffffff;
+  color: #1f2328;
+}
+
+.top-row {
+  margin-bottom: 15px;
+}
+
+.row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.input-group {
+  display: flex;
+  gap: 5px;
+  margin-bottom: 12px;
+}
+
+input[type="text"] {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid #c5cbd3;
+  border-radius: 6px;
+}
+
+button {
+  cursor: pointer;
+  background: #0a66c2;
+  color: #ffffff;
+  border: none;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-weight: 700;
+}
+
+button:hover {
+  background: #0057ad;
+}
+
+button.delete-btn {
+  background: #dc3545;
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
+button.delete-btn:hover {
+  background: #bb2d3b;
+}
+
+.score-section {
+  border: 1px solid #d8dee4;
+  border-radius: 8px;
+  padding: 10px;
+  margin-bottom: 12px;
+  background: #f8fafc;
+}
+
+.range-label {
+  display: block;
+  margin: 8px 0 6px;
+  font-size: 13px;
+  color: #364152;
+}
+
+#scoreThreshold {
+  width: 100%;
+}
+
+.score-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.apply-btn {
+  min-width: 78px;
+}
+
+.apply-btn:disabled {
+  cursor: not-allowed;
+  background: #9aa4b2;
+}
+
+.hint {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #57606a;
+}
+
+ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  background: #f3f2ef;
+  margin-bottom: 5px;
+  padding: 8px;
+  border-radius: 6px;
+  font-size: 14px;
+  word-break: break-word;
+}

@@ -22,6 +22,90 @@
   transform: scale(1.05);
 }
 
+.emoji-wrapper {
+  display: inline-block;
+  filter: saturate(0.8);
+}
+
+.bs-scored-post {
+  position: relative;
+}
+
+.bs-post-badge {
+  position: relative;
+  z-index: 6;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  margin: 8px 12px 8px auto;
+  padding: 6px 8px;
+  border-radius: 999px;
+  background: rgba(12, 18, 27, 0.9);
+  color: #f8fafc;
+  font-size: 12px;
+  line-height: 1;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+}
+
+.bs-post-badge.is-low {
+  background: rgba(22, 101, 52, 0.9);
+}
+
+.bs-post-badge.is-medium {
+  background: rgba(161, 98, 7, 0.92);
+}
+
+.bs-post-badge.is-high {
+  background: rgba(153, 27, 27, 0.94);
+}
+
+.bs-post-score-label {
+  font-weight: 700;
+}
+
+.bs-post-toggle {
+  border: none;
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 11px;
+  line-height: 1;
+  font-weight: 700;
+  cursor: pointer;
+  color: #0f172a;
+  background: #fcd34d;
+}
+
+.bs-post-toggle:hover {
+  background: #fbbf24;
+}
+
+.bs-collapsed-post {
+  min-height: 84px;
+  border-left: 3px solid #d97706;
+  background: linear-gradient(180deg, #fffbeb 0%, #ffffff 100%);
+}
+
+.bs-collapsed-post > *:not(.bs-post-badge):not(.bs-post-preview) {
+  display: none !important;
+}
+
+.bs-post-preview {
+  display: -webkit-box;
+  margin: 8px 14px 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  color: #7c2d12;
+  font-size: 13px;
+  line-height: 1.45;
+  font-weight: 500;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 6;
+}
+
 /* Example: class to be applied to filtered elements (legacy) */
 .linkedin-bs-filtered {
   display: none !important;

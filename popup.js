@@ -3,21 +3,62 @@ const toggleExtension = document.getElementById('toggleExtension');
 const newWordInput = document.getElementById('newWord');
 const addBtn = document.getElementById('addBtn');
 const wordList = document.getElementById('wordList');
+const enableScoring = document.getElementById('enableScoring');
+const scoreThreshold = document.getElementById('scoreThreshold');
+const scoreThresholdValue = document.getElementById('scoreThresholdValue');
+const applyScoreBtn = document.getElementById('applyScoreBtn');
 
 // Varsayılan State
-let state = { isActive: true, bsWords: [] };
+let state = {
+    isActive: true,
+    bsWords: [],
+    enableScoring: true,
+    scoreThreshold: 6
+};
+
+let pendingScoreThreshold = 6;
 
 function sortWordsAlphabetically(words) {
     return [...words].sort((a, b) => a.localeCompare(b, ['tr', 'en'], { sensitivity: 'base' }));
 }
 
+function normalizeThreshold(value) {
+    const parsed = Number.parseInt(value, 10);
+    if (Number.isNaN(parsed)) return 6;
+    return Math.min(20, Math.max(1, parsed));
+}
+
+function renderApplyButtonState() {
+    const hasPendingThreshold = normalizeThreshold(pendingScoreThreshold) !== normalizeThreshold(state.scoreThreshold);
+    applyScoreBtn.disabled = !state.enableScoring || !hasPendingThreshold;
+}
+
+function renderScoringControls() {
+    enableScoring.checked = state.enableScoring !== false;
+    scoreThreshold.value = String(pendingScoreThreshold);
+    scoreThresholdValue.textContent = String(pendingScoreThreshold);
+    scoreThreshold.disabled = !enableScoring.checked;
+    renderApplyButtonState();
+}
+
 // 1. UYGULAMA BAŞLATILDIĞINDA: Storage'dan veriyi çek ve UI'ı çiz
-chrome.storage.sync.get({ isActive: true, bsWords: allDefaultBSWords }, (data) => {
+chrome.storage.sync.get({
+    isActive: true,
+    bsWords: allDefaultBSWords,
+    enableScoring: true,
+    scoreThreshold: 6
+}, (data) => {
     state = {
         ...data,
+        enableScoring: data.enableScoring !== false,
+        scoreThreshold: normalizeThreshold(data.scoreThreshold),
         bsWords: sortWordsAlphabetically(data.bsWords || [])
     };
+
+    pendingScoreThreshold = state.scoreThreshold;
+
     toggleExtension.checked = state.isActive;
+    renderScoringControls();
     renderList();
 });
 
@@ -42,12 +83,15 @@ function renderList() {
 function saveAndNotify() {
     // Önce veritabanına (storage) yaz
     chrome.storage.sync.set(state, () => {
-        // Sonra aktif olan Chrome sekmesini (tab) bul
-        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-            // Eğer aktif sekme bir LinkedIn sayfasıysa, content.js'e mesajı ateşle
-            if (tabs[0] && tabs[0].url.includes("linkedin.com")) {
-                chrome.tabs.sendMessage(tabs[0].id, { action: "updateState", state: state });
-            }
+        // LinkedIn sekmelerinin tamamını güncelle
+        chrome.tabs.query({ url: ["*://*.linkedin.com/*"] }, (tabs) => {
+            tabs.forEach((tab) => {
+                if (!tab.id) return;
+                chrome.tabs.sendMessage(tab.id, { action: "updateState", state: state }, () => {
+                    // Content script olmayan sekmelerde runtime.lastError beklenen bir durum olabilir.
+                    void chrome.runtime.lastError;
+                });
+            });
         });
     });
 }
@@ -58,6 +102,25 @@ function saveAndNotify() {
 toggleExtension.addEventListener('change', (e) => {
     state.isActive = e.target.checked;
     saveAndNotify(); // Kaydet ve LinkedIn'e bildir
+});
+
+enableScoring.addEventListener('change', (e) => {
+    state.enableScoring = e.target.checked;
+    renderScoringControls();
+    saveAndNotify();
+});
+
+scoreThreshold.addEventListener('input', (e) => {
+    const normalized = normalizeThreshold(e.target.value);
+    pendingScoreThreshold = normalized;
+    scoreThresholdValue.textContent = String(normalized);
+    renderApplyButtonState();
+});
+
+applyScoreBtn.addEventListener('click', () => {
+    state.scoreThreshold = normalizeThreshold(pendingScoreThreshold);
+    renderScoringControls();
+    saveAndNotify();
 });
 
 // Yeni kelime eklendiğinde

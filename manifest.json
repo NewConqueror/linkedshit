@@ -19,6 +19,9 @@
       "matches": [
         "*://*.linkedin.com/*"
       ],
+      "css": [
+        "styles.css"
+      ],
       "js": [
         "words.js",
         "content.js"
