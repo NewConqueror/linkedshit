@@ -1,7 +1,8 @@
 let isMutating = false;
-let bsWords = [];
-let regexBS = null;
-const regexEmoji = /[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu;
+let regexBSTest = null;
+let regexBSReplace = null;
+const regexEmojiTest = /[\p{Emoji_Presentation}\p{Extended_Pictographic}]/u;
+const regexEmojiReplace = /[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu;
 const strongPostContainerSelector = [
     '[data-urn^="urn:li:activity:"]',
     '[data-id^="urn:li:activity:"]',
@@ -53,6 +54,10 @@ let observerCycleCount = 0;
 let observerWindowStart = Date.now();
 let observerCooldownTimer = null;
 let statsFlushTimer = null;
+let isObserverRunning = false;
+let isEngineActive = false;
+let compiledWordsSignature = '';
+let currentWordsSignature = '';
 
 const weeklyStatsStorageKey = 'bsWeeklyStatsV1';
 const maxSeenHashesPerWeek = 2500;
@@ -62,6 +67,11 @@ const statsFlushDelayMs = 1200;
 let pendingStatsRecords = [];
 let sessionReportedHashes = new Set();
 let sessionWeekKey = '';
+let scoredPostsCache = new Set();
+
+const wrapperPostCache = new WeakMap();
+const wrapperWordsCache = new WeakMap();
+const postFingerprintCache = new WeakMap();
 
 const observerWindowMs = 2500;
 const observerCycleLimit = 500;
@@ -103,23 +113,64 @@ function escapeRegExp(string) {
     return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+function normalizeWordList(words) {
+    if (!Array.isArray(words)) return [];
+
+    const deduped = [];
+    const seen = new Set();
+
+    words.forEach((word) => {
+        const normalized = String(word || '').trim();
+        if (!normalized) return;
+
+        const key = normalized.toLocaleLowerCase('tr-TR');
+        if (seen.has(key)) return;
+
+        seen.add(key);
+        deduped.push(normalized);
+    });
+
+    // Uzun ifadeleri öne almak regex alternation backtracking maliyetini azaltır.
+    deduped.sort((a, b) => b.length - a.length);
+    return deduped;
+}
+
+function getWordsSignature(words) {
+    return normalizeWordList(words).join('\u0001');
+}
+
 function updateRegex(words) {
-    if (!words || words.length === 0) {
-        regexBS = null;
-        return;
+    const normalizedWords = normalizeWordList(words);
+    if (!normalizedWords.length) {
+        regexBSTest = null;
+        regexBSReplace = null;
+        compiledWordsSignature = '';
+        return false;
+    }
+
+    const nextSignature = normalizedWords.join('\u0001');
+    if (nextSignature === compiledWordsSignature && regexBSTest && regexBSReplace) {
+        return false;
     }
 
     // 1. Kullanıcının kelimelerini aşılmaz Türkçe Regex matrisine çevirmeden önce escape ediyoruz
-    const safeWords = words.map(escapeRegExp);
+    const safeWords = normalizedWords.map(escapeRegExp);
     const turkishWords = safeWords.map(makeTurkishRegex);
     const combined = turkishWords.join('|');
 
     // 2. Kelimenin herhangi bir yerde geçmesini sağlayacak şekilde (kısıtlamasız yakalama)
     try {
-        regexBS = new RegExp(`(?<![a-zıİğĞüÜşŞçÇöÖ])(${combined})(?![a-zıİğĞüÜşŞçÇöÖ])`, 'giu');
+        const source = `(?<![a-zıİğĞüÜşŞçÇöÖ])(${combined})(?![a-zıİğĞüÜşŞçÇöÖ])`;
+        regexBSTest = new RegExp(source, 'iu');
+        regexBSReplace = new RegExp(source, 'giu');
+        compiledWordsSignature = nextSignature;
+        return true;
     } catch (e) {
         console.error("Critical: Failed to compile BS Filter regex.", e);
-        regexBS = null;
+        regexBSTest = null;
+        regexBSReplace = null;
+        compiledWordsSignature = '';
+        return false;
     }
 }
 
@@ -263,16 +314,19 @@ function hashString(input) {
     return (hash >>> 0).toString(36);
 }
 
-function createPostFingerprint(post, metric) {
+function createPostFingerprint(post) {
+    const cachedFingerprint = postFingerprintCache.get(post);
+    if (cachedFingerprint) return cachedFingerprint;
+
     const urn = (post.getAttribute && (post.getAttribute('data-urn') || post.getAttribute('data-id'))) || '';
-    const wordsSignature = Object.keys(metric.words).sort().join('|');
-    const scoreSignature = `${metric.score}|${metric.emojiCount}`;
     const textSample = (post.textContent || '')
         .replace(/\s+/g, ' ')
         .trim()
         .slice(0, 220);
 
-    return hashString(`${urn}|${scoreSignature}|${wordsSignature}|${textSample}`);
+    const fingerprint = hashString(`${urn}|${textSample}`);
+    postFingerprintCache.set(post, fingerprint);
+    return fingerprint;
 }
 
 function pruneWordFrequencyMap(wordMap) {
@@ -338,7 +392,7 @@ function queueStatsFromPostMetrics(postMetrics) {
     postMetrics.forEach((metric, post) => {
         if (!metric || !metric.score) return;
 
-        const fingerprint = createPostFingerprint(post, metric);
+        const fingerprint = createPostFingerprint(post);
         if (!fingerprint || sessionReportedHashes.has(fingerprint)) return;
 
         sessionReportedHashes.add(fingerprint);
@@ -485,6 +539,62 @@ function findFallbackScorableContainer(element) {
     return element && element.parentElement ? element.parentElement : null;
 }
 
+function resolvePostContainerForWrapper(wrapper) {
+    const cachedPost = wrapperPostCache.get(wrapper);
+    if (cachedPost && cachedPost.isConnected) {
+        return cachedPost;
+    }
+
+    let post = findPostContainer(wrapper.parentElement || wrapper);
+    if (!post && wrapper.closest) {
+        post = wrapper.closest('li, article, [role="article"], [data-urn], [data-id], .fie-impression-container');
+    }
+
+    if (!post) {
+        post = findFallbackScorableContainer(wrapper.parentElement || wrapper);
+    }
+
+    if (!post) return null;
+
+    if (['SPAN', 'P', 'A'].includes(post.tagName) && post.parentElement) {
+        post = post.parentElement;
+    }
+
+    if (post) {
+        wrapperPostCache.set(wrapper, post);
+    }
+
+    return post;
+}
+
+function getWrapperWordCounts(wrapper) {
+    const cachedWordCounts = wrapperWordsCache.get(wrapper);
+    if (cachedWordCounts) return cachedWordCounts;
+
+    const serializedWords = wrapper.getAttribute('data-bs-words');
+    if (serializedWords) {
+        try {
+            const parsed = JSON.parse(serializedWords);
+            wrapperWordsCache.set(wrapper, parsed);
+            return parsed;
+        } catch (error) {
+            // Corrupted payload fallback to live extraction.
+        }
+    }
+
+    const extractedWords = {};
+    wrapper.querySelectorAll('span.bs-keyword').forEach((keywordNode) => {
+        const rawWord = keywordNode.getAttribute('data-orig') || '';
+        const normalizedWord = normalizeStatWord(rawWord);
+        if (!normalizedWord) return;
+
+        extractedWords[normalizedWord] = (extractedWords[normalizedWord] || 0) + 1;
+    });
+
+    wrapperWordsCache.set(wrapper, extractedWords);
+    return extractedWords;
+}
+
 function clearPostScoring() {
     document.querySelectorAll('.bs-post-badge').forEach((badge) => badge.remove());
     document.querySelectorAll('.bs-post-preview').forEach((preview) => preview.remove());
@@ -493,6 +603,8 @@ function clearPostScoring() {
         post.removeAttribute('data-bs-score');
         delete post.dataset.bsForceOpen;
     });
+
+    scoredPostsCache = new Set();
 }
 
 function upsertPostBadge(post, score) {
@@ -570,23 +682,13 @@ function applyPostScoring() {
 
     const postMetrics = new Map();
     document.querySelectorAll('span.bs-main-wrapper').forEach((wrapper) => {
-        let post = findPostContainer(wrapper.parentElement || wrapper);
-        if (!post && wrapper.closest) {
-            post = wrapper.closest('li, article, [role="article"], [data-urn], [data-id], .fie-impression-container');
-        }
-
-        if (!post) {
-            post = findFallbackScorableContainer(wrapper.parentElement || wrapper);
-        }
-
+        const post = resolvePostContainerForWrapper(wrapper);
         if (!post) return;
 
-        if (['SPAN', 'P', 'A'].includes(post.tagName) && post.parentElement) {
-            post = post.parentElement;
-        }
-
-        const bsCount = wrapper.querySelectorAll('span.bs-keyword').length;
-        const emojiCount = wrapper.querySelectorAll('span.emoji-wrapper').length;
+        const bsCountRaw = Number.parseInt(wrapper.getAttribute('data-bs-count') || '', 10);
+        const emojiCountRaw = Number.parseInt(wrapper.getAttribute('data-emoji-count') || '', 10);
+        const bsCount = Number.isNaN(bsCountRaw) ? wrapper.querySelectorAll('span.bs-keyword').length : bsCountRaw;
+        const emojiCount = Number.isNaN(emojiCountRaw) ? wrapper.querySelectorAll('span.emoji-wrapper').length : emojiCountRaw;
         const nodeScore = bsCount + emojiCount;
         if (!nodeScore) return;
 
@@ -599,19 +701,17 @@ function applyPostScoring() {
         metric.score += nodeScore;
         metric.emojiCount += emojiCount;
 
-        wrapper.querySelectorAll('span.bs-keyword').forEach((keywordNode) => {
-            const rawWord = keywordNode.getAttribute('data-orig') || '';
-            const normalizedWord = normalizeStatWord(rawWord);
-            if (!normalizedWord) return;
-
-            metric.words[normalizedWord] = (metric.words[normalizedWord] || 0) + 1;
+        const wrapperWordCounts = getWrapperWordCounts(wrapper);
+        Object.entries(wrapperWordCounts).forEach(([word, count]) => {
+            metric.words[word] = (metric.words[word] || 0) + count;
         });
 
         postMetrics.set(post, metric);
     });
 
-    document.querySelectorAll('.bs-scored-post').forEach((post) => {
-        if (postMetrics.has(post)) return;
+    const currentScoredPosts = new Set(postMetrics.keys());
+    scoredPostsCache.forEach((post) => {
+        if (currentScoredPosts.has(post)) return;
         post.classList.remove('bs-scored-post', 'bs-collapsed-post');
         post.removeAttribute('data-bs-score');
         delete post.dataset.bsForceOpen;
@@ -625,10 +725,14 @@ function applyPostScoring() {
         upsertPostBadge(post, metric.score);
     });
 
+    scoredPostsCache = currentScoredPosts;
+
     queueStatsFromPostMetrics(postMetrics);
 }
 
 function schedulePostScoring() {
+    if (!scoreSettings.enableScoring) return;
+
     clearTimeout(scoreRefreshTimer);
     scoreRefreshTimer = setTimeout(() => {
         applyPostScoring();
@@ -646,6 +750,21 @@ function resetObserverCounterWindow() {
     observerWindowStart = Date.now();
 }
 
+function startObserver() {
+    if (isObserverRunning || !document.body) return;
+
+    resetObserverCounterWindow();
+    observer.observe(document.body, { childList: true, subtree: true });
+    isObserverRunning = true;
+}
+
+function stopObserver() {
+    if (!isObserverRunning) return;
+
+    observer.disconnect();
+    isObserverRunning = false;
+}
+
 function isObserverOverloaded() {
     const now = Date.now();
     if (now - observerWindowStart > observerWindowMs) {
@@ -657,13 +776,10 @@ function isObserverOverloaded() {
 }
 
 function pauseObserverTemporarily() {
-    observer.disconnect();
+    stopObserver();
     clearTimeout(observerCooldownTimer);
     observerCooldownTimer = setTimeout(() => {
-        resetObserverCounterWindow();
-        if (document.body) {
-            observer.observe(document.body, { childList: true, subtree: true });
-        }
+        startObserver();
     }, 800);
 }
 
@@ -671,64 +787,78 @@ function pauseObserverTemporarily() {
 function restoreDOM() {
     const wrappers = document.querySelectorAll('span.bs-main-wrapper');
     wrappers.forEach(wrapper => {
-        // 1. Önce bu cümlenin içindeki emojileri orijinal haline (data-orig) döndür
-        const emojis = wrapper.querySelectorAll('span.emoji-wrapper');
-        emojis.forEach(emp => {
-            const originalEmoji = emp.getAttribute('data-orig');
-            emp.parentNode.replaceChild(document.createTextNode(originalEmoji), emp);
-        });
-
-        // 2. Değiştirilen BS kelimelerini orijinal haline (data-orig) döndür
-        const keywords = wrapper.querySelectorAll('span.bs-keyword');
-        keywords.forEach(kw => {
-            const originalKeyword = kw.getAttribute('data-orig');
-            kw.parentNode.replaceChild(document.createTextNode(originalKeyword), kw);
-        });
-
-        // 3. Artık wrapper'ın içindeki tüm metin (textContent) %100 orijinal halinde. 
-        // Wrapper'ı yok et ve yerine saf metin düğümü koy.
-        const originalTextNode = document.createTextNode(wrapper.textContent);
-        wrapper.parentNode.replaceChild(originalTextNode, wrapper);
+        const originalText = wrapper.getAttribute('data-original-text');
+        const textNode = document.createTextNode(originalText !== null ? originalText : wrapper.textContent);
+        wrapper.parentNode.replaceChild(textNode, wrapper);
     });
 
     clearPostScoring();
 }
 
 function processTextNode(node) {
-    if (!node.nodeValue || !node.parentNode) return;
-    if (!isWithinProcessingScope(node)) return;
-    if (isInsideIgnoredContainer(node)) return;
+    if (!node.nodeValue || !node.parentNode) return false;
+    if (!isWithinProcessingScope(node)) return false;
+    if (isInsideIgnoredContainer(node)) return false;
     
-    let originalText = node.nodeValue;
+    const originalText = node.nodeValue;
     
     // İşlem yapmaya gerek var mı diye kontrol et (Performans için)
-    let hasEmoji = originalText.match(regexEmoji);
-    let hasBS = regexBS ? originalText.match(regexBS) : false;
+    const hasEmoji = regexEmojiTest.test(originalText);
+    const hasBS = regexBSTest ? regexBSTest.test(originalText) : false;
     
-    if (!hasEmoji && !hasBS) return; // İkisi de yoksa pas geç
+    if (!hasEmoji && !hasBS) return false; // İkisi de yoksa pas geç
 
     // Güvenli HTML string'i oluştur
     let processedHTML = escapeHTML(originalText);
+    let emojiCount = 0;
+    let bsCount = 0;
+    const wordCounts = {};
     
     // 1. Emojileri stateful span'ler ile değiştir
     if (hasEmoji) {
+        regexEmojiReplace.lastIndex = 0;
         // Orijinal emojiyi data-orig içine saklıyoruz
-        processedHTML = processedHTML.replace(regexEmoji, '<span class="emoji-wrapper" data-orig="$&">🤡</span>');
+        processedHTML = processedHTML.replace(regexEmojiReplace, (match) => {
+            emojiCount += 1;
+            return `<span class="emoji-wrapper" data-orig="${match}">🤡</span>`;
+        });
     }
     
     // 2. BS kelimelerini değiştir
-    if (hasBS) {
-        processedHTML = processedHTML.replace(regexBS, '<span class="bs-keyword" data-orig="$&">🔴</span>');
+    if (hasBS && regexBSReplace) {
+        regexBSReplace.lastIndex = 0;
+        processedHTML = processedHTML.replace(regexBSReplace, (match) => {
+            bsCount += 1;
+
+            const normalizedWord = normalizeStatWord(match);
+            if (normalizedWord) {
+                wordCounts[normalizedWord] = (wordCounts[normalizedWord] || 0) + 1;
+            }
+
+            return `<span class="bs-keyword" data-orig="${match}">🔴</span>`;
+        });
     }
 
     // Tek bir ana kapsayıcı (wrapper) oluştur ve DOM'a bas
-    let span = document.createElement('span');
+    const span = document.createElement('span');
     span.className = 'bs-main-wrapper';
+    span.setAttribute('data-original-text', originalText);
+    span.setAttribute('data-bs-count', String(bsCount));
+    span.setAttribute('data-emoji-count', String(emojiCount));
+    if (bsCount > 0) {
+        const serializedWords = JSON.stringify(wordCounts);
+        span.setAttribute('data-bs-words', serializedWords);
+        wrapperWordsCache.set(span, wordCounts);
+    }
+
     span.innerHTML = processedHTML;
     node.parentNode.replaceChild(span, node);
+    return true;
 }
 
 function walkAndProcess(rootElement) {
+    if (!rootElement) return 0;
+
     const walker = document.createTreeWalker(rootElement, NodeFilter.SHOW_TEXT, {
         acceptNode: function(node) {
             const parent = node.parentNode;
@@ -760,11 +890,17 @@ function walkAndProcess(rootElement) {
     // PRECISE FIX: O(1) Memory Footprint via Generator/Direct Processing
     let currentNode;
     let nextNode = walker.nextNode();
+    let changedCount = 0;
+
     while (nextNode) {
         currentNode = nextNode;
         nextNode = walker.nextNode(); // grab the next BEFORE processing/replacing the current node
-        processTextNode(currentNode);
+        if (processTextNode(currentNode)) {
+            changedCount += 1;
+        }
     }
+
+    return changedCount;
 }
 
 const observer = new MutationObserver((mutations) => {
@@ -787,15 +923,18 @@ const observer = new MutationObserver((mutations) => {
                     if (node.closest && node.closest('.bs-post-preview')) return;
                     if (!isWithinProcessingScope(node) || isInsideIgnoredContainer(node)) return;
 
-                    walkAndProcess(node);
-                    hasRelevantMutations = true;
+                    const changedCount = walkAndProcess(node);
+                    if (changedCount > 0) {
+                        hasRelevantMutations = true;
+                    }
                 } else if (node.nodeType === Node.TEXT_NODE) {
                     if (node.parentElement && node.parentElement.closest('.bs-post-badge')) return;
                     if (node.parentElement && node.parentElement.closest('.bs-post-preview')) return;
                     if (!isWithinProcessingScope(node) || isInsideIgnoredContainer(node)) return;
 
-                    processTextNode(node);
-                    hasRelevantMutations = true;
+                    if (processTextNode(node)) {
+                        hasRelevantMutations = true;
+                    }
                 }
             });
         });
@@ -810,49 +949,101 @@ const observer = new MutationObserver((mutations) => {
     }
 });
 
+function processAllRoots() {
+    isMutating = true;
+    let totalChanges = 0;
+
+    try {
+        getProcessingRoots().forEach((root) => {
+            totalChanges += walkAndProcess(root);
+        });
+    } finally {
+        isMutating = false;
+    }
+
+    return totalChanges;
+}
+
 chrome.storage.sync.get({
     isActive: true,
     bsWords: typeof allDefaultBSWords !== 'undefined' ? allDefaultBSWords : [],
     enableScoring: true,
     scoreThreshold: defaultScoreThreshold
 }, (state) => {
-    if (!state.isActive) return;
-
     updateScoreSettings(state);
-    updateRegex(state.bsWords);
+    const initialWords = Array.isArray(state.bsWords) ? state.bsWords : [];
+    currentWordsSignature = getWordsSignature(initialWords);
+
+    if (!state.isActive) {
+        isEngineActive = false;
+        stopObserver();
+        return;
+    }
+
+    updateRegex(initialWords);
+    isEngineActive = true;
     
     // Sayfa yüklenirken latency toleransı
     setTimeout(() => {
-        isMutating = true;
-        getProcessingRoots().forEach((root) => walkAndProcess(root));
-        isMutating = false;
-        applyPostScoring();
+        processAllRoots();
+        if (scoreSettings.enableScoring) {
+            applyPostScoring();
+        }
+        startObserver();
     }, 2000);
-    
-    resetObserverCounterWindow();
-    observer.observe(document.body, { childList: true, subtree: true });
 });
 
 // Real-time İletişim: Aç/Kapat ve Kelime Ekle/Çıkar
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === "updateState" && request.state) {
-        isMutating = true;
         updateScoreSettings(request.state);
-        
-        if (request.state.isActive === false) {
-            observer.disconnect();
+
+        const shouldBeActive = request.state.isActive !== false;
+        if (!shouldBeActive) {
+            stopObserver();
             clearTimeout(observerCooldownTimer);
-            restoreDOM(); // Emojileri ve kelimeleri geri getir
+            clearTimeout(scoreRefreshTimer);
+            clearTimeout(statsFlushTimer);
+            flushPendingStats();
+
+            if (isEngineActive) {
+                restoreDOM(); // Emojileri ve kelimeleri geri getir
+            }
+
+            isEngineActive = false;
+            currentWordsSignature = '';
             console.log("🛑 Motor durduruldu, orijinal DOM yüklendi.");
-            isMutating = false;
-        } else {
-            updateRegex(request.state.bsWords);
-            restoreDOM(); // Önce eski kalıntıları temizle
-            getProcessingRoots().forEach((root) => walkAndProcess(root)); // Yeni kurallarla tekrar tara
-            applyPostScoring();
-            isMutating = false;
-            resetObserverCounterWindow();
-            observer.observe(document.body, { childList: true, subtree: true });
+            return;
         }
+
+        const incomingWords = Array.isArray(request.state.bsWords) ? request.state.bsWords : [];
+        const nextWordsSignature = getWordsSignature(incomingWords);
+        const wordsChanged = nextWordsSignature !== currentWordsSignature;
+        const shouldRescanText = !isEngineActive || wordsChanged;
+
+        if (shouldRescanText) {
+            stopObserver();
+            updateRegex(incomingWords);
+            currentWordsSignature = nextWordsSignature;
+
+            if (isEngineActive) {
+                restoreDOM(); // Önce eski kalıntıları temizle
+            }
+            processAllRoots(); // Yeni kurallarla tekrar tara
+        }
+
+        if (scoreSettings.enableScoring) {
+            applyPostScoring();
+        } else {
+            clearPostScoring();
+        }
+
+        isEngineActive = true;
+        startObserver();
     }
+});
+
+window.addEventListener('beforeunload', () => {
+    clearTimeout(statsFlushTimer);
+    flushPendingStats();
 });

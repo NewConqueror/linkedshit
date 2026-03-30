@@ -146,6 +146,8 @@ chrome.storage.sync.get({
 // 2. UI ÇİZİM FONKSİYONU
 function renderList() {
     wordList.innerHTML = ''; // Listeyi temizle
+    const fragment = document.createDocumentFragment();
+
     state.bsWords.forEach((word, index) => {
         const li = document.createElement('li');
         li.textContent = word;
@@ -156,8 +158,10 @@ function renderList() {
         delBtn.onclick = () => removeWord(index); // Silme event'i
         
         li.appendChild(delBtn);
-        wordList.appendChild(li);
+        fragment.appendChild(li);
     });
+
+    wordList.appendChild(fragment);
 }
 
 // 3. THE MISSING PIECE (Eksik Parça): Veriyi Kaydet ve Sekmeye Sinyal Gönder
@@ -213,9 +217,17 @@ resetStatsBtn.addEventListener('click', () => {
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== 'local') return;
-    if (!changes[weeklyStatsStorageKey]) return;
+    const statsChange = changes[weeklyStatsStorageKey];
+    if (!statsChange) return;
 
-    loadWeeklyStats();
+    const weekKey = getCurrentWeekKey();
+    const nextStats = statsChange.newValue;
+    if (!nextStats || nextStats.weekKey !== weekKey) {
+        renderWeeklyStats(createEmptyWeeklyStats());
+        return;
+    }
+
+    renderWeeklyStats(nextStats);
 });
 
 // Yeni kelime eklendiğinde
